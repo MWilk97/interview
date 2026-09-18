@@ -36,7 +36,9 @@ class ApiExceptionHandler extends ResponseEntityExceptionHandler {
 
     @ExceptionHandler(IdempotencyKeyConflictException.class)
     ProblemDetail idempotencyKeyConflict(IdempotencyKeyConflictException e) {
-        return Problems.of(HttpStatus.CONFLICT, "Idempotency key conflict", e.getMessage());
+        ProblemDetail problem = Problems.of(HttpStatus.CONFLICT, "Idempotency key conflict", e.getMessage());
+        problem.setProperty("idempotencyKey", e.key().value());
+        return problem;
     }
 
     @ExceptionHandler(InvalidRequestException.class)

@@ -15,9 +15,11 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
+@RequestMapping("/transfers")
 class TransferController {
 
     private static final Logger log = LoggerFactory.getLogger(TransferController.class);
@@ -32,7 +34,7 @@ class TransferController {
      * The mapping from outcome to response is a pure function, so a replayed outcome yields an identical
      * response for a retried idempotency key.
      */
-    @PostMapping("/transfers")
+    @PostMapping
     ResponseEntity<Object> transfer(@RequestHeader("X-Client-Id") String clientId,
                                     @RequestHeader("Idempotency-Key") String idempotencyKey,
                                     @Valid @RequestBody PostTransferRequest request) {

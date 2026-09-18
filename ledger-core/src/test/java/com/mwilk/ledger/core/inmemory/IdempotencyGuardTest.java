@@ -118,7 +118,7 @@ class IdempotencyGuardTest {
                 waiterThread.set(Thread.currentThread());
                 return guard.executeOnce(KEY, "req", () -> "should not run yet");
             });
-            awaitParked(waiterThread);
+            Threads.awaitParked(waiterThread);
             releaseOwner.countDown();
 
             assertThatThrownBy(owner::get).cause().isInstanceOf(IllegalStateException.class);
@@ -170,7 +170,7 @@ class IdempotencyGuardTest {
                     return "retry-result";
                 });
             });
-            awaitParked(waiterThread);
+            Threads.awaitParked(waiterThread);
             releaseOwner.countDown();
 
             assertThat(owner.get()).isEqualTo("owner-result");
@@ -188,19 +188,6 @@ class IdempotencyGuardTest {
 
         assertThatThrownBy(() -> tiny.executeOnce(new IdempotencyKey("client", "k3"), "req", () -> "c"))
                 .isInstanceOf(IdempotencyCapacityExceededException.class);
-    }
-
-    /** Spins until the thread is blocked inside the guard, so the test cannot race ahead of it. */
-    private static void awaitParked(AtomicReference<Thread> threadRef) throws InterruptedException {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-        while (System.nanoTime() < deadline) {
-            Thread thread = threadRef.get();
-            if (thread != null && thread.getState() == Thread.State.WAITING) {
-                return;
-            }
-            Thread.sleep(1);
-        }
-        throw new AssertionError("Waiter never blocked on the owner's result");
     }
 
     private static void await(CountDownLatch latch) {

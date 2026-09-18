@@ -8,7 +8,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 
 /** @param amount amount to move in minor units */
-public record PostTransferRequest(@NotBlank String fromAccountId,
+record PostTransferRequest(@NotBlank String fromAccountId,
                                   @NotBlank String toAccountId,
                                   @NotNull @Positive Long amount) {
 

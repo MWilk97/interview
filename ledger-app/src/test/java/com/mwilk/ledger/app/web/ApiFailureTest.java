@@ -1,6 +1,5 @@
-package com.mwilk.ledger.app;
+package com.mwilk.ledger.app.web;
 
-import com.mwilk.ledger.app.web.OpenAccountRequest;
 import com.mwilk.ledger.core.Ledger;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

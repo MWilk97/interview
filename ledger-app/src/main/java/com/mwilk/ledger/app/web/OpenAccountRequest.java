@@ -4,5 +4,5 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;
 
 /** @param initialBalance opening balance in minor units */
-public record OpenAccountRequest(@NotNull @PositiveOrZero Long initialBalance) {
+record OpenAccountRequest(@NotNull @PositiveOrZero Long initialBalance) {
 }

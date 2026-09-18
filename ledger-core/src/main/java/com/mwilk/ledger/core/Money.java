@@ -4,7 +4,7 @@ package com.mwilk.ledger.core;
  * A non-negative amount in minor units (e.g. cents) of a single implicit currency.
  * Arithmetic is exact: overflow raises {@link ArithmeticException} instead of wrapping.
  */
-public record Money(long minorUnits) implements Comparable<Money> {
+public record Money(long minorUnits) {
 
     public static final Money ZERO = new Money(0);
 
@@ -41,10 +41,5 @@ public record Money(long minorUnits) implements Comparable<Money> {
 
     public boolean isLessThan(Money other) {
         return minorUnits < other.minorUnits;
-    }
-
-    @Override
-    public int compareTo(Money other) {
-        return Long.compare(minorUnits, other.minorUnits);
     }
 }

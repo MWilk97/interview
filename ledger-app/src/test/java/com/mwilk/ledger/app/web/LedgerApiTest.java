@@ -1,9 +1,5 @@
-package com.mwilk.ledger.app;
+package com.mwilk.ledger.app.web;
 
-import com.mwilk.ledger.app.web.AccountResponse;
-import com.mwilk.ledger.app.web.OpenAccountRequest;
-import com.mwilk.ledger.app.web.PostTransferRequest;
-import com.mwilk.ledger.app.web.TransferResponse;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureRestTestClient;
@@ -181,7 +177,9 @@ class LedgerApiTest {
         postTransfer(key, new PostTransferRequest(from.id(), to.id(), 10L)).expectStatus().isCreated();
         postTransfer(key, new PostTransferRequest(from.id(), to.id(), 20L))
                 .expectStatus().isEqualTo(HttpStatus.CONFLICT)
-                .expectBody().jsonPath("$.title").isEqualTo("Idempotency key conflict");
+                .expectBody()
+                .jsonPath("$.title").isEqualTo("Idempotency key conflict")
+                .jsonPath("$.idempotencyKey").isEqualTo(key);
 
         assertThat(balanceOf(from.id())).isEqualTo(90);
     }

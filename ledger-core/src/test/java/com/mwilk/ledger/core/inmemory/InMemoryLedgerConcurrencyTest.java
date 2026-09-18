@@ -19,6 +19,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -191,14 +192,23 @@ class InMemoryLedgerConcurrencyTest {
         TransferRequest request = new TransferRequest(from, to, Money.ofMinorUnits(30));
 
         List<Future<TransferOutcome>> attempts = new ArrayList<>();
+        List<AtomicReference<Thread>> retryThreads = new ArrayList<>();
         try (ExecutorService pool = Executors.newFixedThreadPool(retries + 1)) {
             attempts.add(pool.submit(() -> ledger.transfer(key, request)));
             probe.awaitEntered();
 
             for (int i = 0; i < retries; i++) {
-                attempts.add(pool.submit(() -> ledger.transfer(key, request)));
+                AtomicReference<Thread> retryThread = new AtomicReference<>();
+                retryThreads.add(retryThread);
+                attempts.add(pool.submit(() -> {
+                    retryThread.set(Thread.currentThread());
+                    return ledger.transfer(key, request);
+                }));
             }
-            Thread.sleep(200);
+            // Every retry has reached the guard and blocked, so "none is done" says something.
+            for (AtomicReference<Thread> retryThread : retryThreads) {
+                Threads.awaitParked(retryThread);
+            }
             assertThat(attempts).noneMatch(Future::isDone);
 
             probe.release();
