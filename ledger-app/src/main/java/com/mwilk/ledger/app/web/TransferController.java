@@ -29,9 +29,11 @@ class TransferController {
      * response for a retried idempotency key.
      */
     @PostMapping("/transfers")
-    ResponseEntity<Object> transfer(@RequestHeader("Idempotency-Key") String idempotencyKey,
+    ResponseEntity<Object> transfer(@RequestHeader("X-Client-Id") String clientId,
+                                    @RequestHeader("Idempotency-Key") String idempotencyKey,
                                     @Valid @RequestBody PostTransferRequest request) {
-        TransferOutcome outcome = ledger.transfer(new IdempotencyKey(idempotencyKey), request.toDomain());
+        IdempotencyKey key = new IdempotencyKey(clientId, idempotencyKey);
+        TransferOutcome outcome = ledger.transfer(key, request.toDomain());
         return switch (outcome) {
             case Completed completed -> ResponseEntity
                     .status(HttpStatus.CREATED)

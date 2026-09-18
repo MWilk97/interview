@@ -25,7 +25,11 @@ public interface Ledger {
     /**
      * Applies {@code request} once for {@code key}.
      *
+     * <p>Keys are retained for a bounded window; a retry that arrives after its key has expired is treated
+     * as a new request and executes again.
+     *
      * @throws IdempotencyKeyConflictException if {@code key} was already used with a different request
+     * @throws IdempotencyCapacityExceededException if the implementation cannot accept another key
      */
     TransferOutcome transfer(IdempotencyKey key, TransferRequest request);
 }

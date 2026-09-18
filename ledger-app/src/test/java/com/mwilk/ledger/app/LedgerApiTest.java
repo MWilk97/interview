@@ -22,6 +22,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 class LedgerApiTest {
 
     private static final String IDEMPOTENCY_KEY = "Idempotency-Key";
+    private static final String CLIENT_ID = "X-Client-Id";
+    private static final String CLIENT = "client-a";
 
     @Autowired
     private RestTestClient client;
@@ -83,6 +85,7 @@ class LedgerApiTest {
 
         TransferResponse response = client.post().uri("/transfers")
                 .header(IDEMPOTENCY_KEY, UUID.randomUUID().toString())
+                .header(CLIENT_ID, CLIENT)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(new PostTransferRequest(from.id(), to.id(), 60L))
                 .exchange()
@@ -103,6 +106,7 @@ class LedgerApiTest {
 
         client.post().uri("/transfers")
                 .header(IDEMPOTENCY_KEY, UUID.randomUUID().toString())
+                .header(CLIENT_ID, CLIENT)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(new PostTransferRequest(from.id(), to.id(), 11L))
                 .exchange()
@@ -133,6 +137,7 @@ class LedgerApiTest {
 
         client.post().uri("/transfers")
                 .header(IDEMPOTENCY_KEY, UUID.randomUUID().toString())
+                .header(CLIENT_ID, CLIENT)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(new PostTransferRequest(from.id(), UUID.randomUUID().toString(), 5L))
                 .exchange()
@@ -182,11 +187,37 @@ class LedgerApiTest {
     }
 
     @Test
+    void theSameKeyFromTwoClientsIsNotAConflict() {
+        AccountResponse from = openAccount(100);
+        AccountResponse to = openAccount(0);
+        PostTransferRequest body = new PostTransferRequest(from.id(), to.id(), 10L);
+
+        postTransfer("client-a", "order-42", body).expectStatus().isCreated();
+        postTransfer("client-b", "order-42", body).expectStatus().isCreated();
+
+        assertThat(balanceOf(to.id())).isEqualTo(20);
+    }
+
+    @Test
+    void missingClientIdIsBadRequest() {
+        AccountResponse from = openAccount(100);
+        AccountResponse to = openAccount(0);
+
+        client.post().uri("/transfers")
+                .header(IDEMPOTENCY_KEY, UUID.randomUUID().toString())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(new PostTransferRequest(from.id(), to.id(), 10L))
+                .exchange()
+                .expectStatus().isBadRequest();
+    }
+
+    @Test
     void missingIdempotencyKeyIsBadRequest() {
         AccountResponse from = openAccount(100);
         AccountResponse to = openAccount(0);
 
         client.post().uri("/transfers")
+                .header(CLIENT_ID, CLIENT)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(new PostTransferRequest(from.id(), to.id(), 10L))
                 .exchange()
@@ -229,8 +260,13 @@ class LedgerApiTest {
     }
 
     private RestTestClient.ResponseSpec postTransfer(String key, PostTransferRequest body) {
+        return postTransfer(CLIENT, key, body);
+    }
+
+    private RestTestClient.ResponseSpec postTransfer(String clientId, String key, PostTransferRequest body) {
         return client.post().uri("/transfers")
                 .header(IDEMPOTENCY_KEY, key)
+                .header(CLIENT_ID, clientId)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(body)
                 .exchange();

@@ -1,10 +1,12 @@
 package com.mwilk.ledger.core.inmemory;
 
+import com.mwilk.ledger.core.IdempotencyCapacityExceededException;
 import com.mwilk.ledger.core.IdempotencyKey;
 import com.mwilk.ledger.core.IdempotencyKeyConflictException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -13,6 +15,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -21,7 +24,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @Timeout(20)
 class IdempotencyGuardTest {
 
-    private static final IdempotencyKey KEY = new IdempotencyKey("key");
+    private static final IdempotencyKey KEY = new IdempotencyKey("client", "key");
 
     private final IdempotencyGuard<String> guard = new IdempotencyGuard<>();
 
@@ -123,6 +126,68 @@ class IdempotencyGuardTest {
         }
 
         assertThat(guard.executeOnce(KEY, "req", () -> "fresh attempt")).isEqualTo("fresh attempt");
+    }
+
+    @Test
+    void aCompletedEntryExpiresAfterItsRetentionWindow() {
+        AtomicLong now = new AtomicLong();
+        IdempotencyGuard<String> expiring = new IdempotencyGuard<>(Duration.ofHours(1), 100, now::get);
+        AtomicInteger invocations = new AtomicInteger();
+
+        String first = expiring.executeOnce(KEY, "req", () -> "result-" + invocations.incrementAndGet());
+        String replayed = expiring.executeOnce(KEY, "req", () -> "result-" + invocations.incrementAndGet());
+        now.addAndGet(Duration.ofHours(2).toNanos());
+        String afterExpiry = expiring.executeOnce(KEY, "req", () -> "result-" + invocations.incrementAndGet());
+
+        assertThat(first).isEqualTo("result-1");
+        assertThat(replayed).isEqualTo("result-1");
+        assertThat(afterExpiry).isEqualTo("result-2");
+    }
+
+    @Test
+    void anEntryStillInFlightIsNeverExpired() throws Exception {
+        AtomicLong now = new AtomicLong();
+        IdempotencyGuard<String> expiring = new IdempotencyGuard<>(Duration.ofHours(1), 100, now::get);
+        CountDownLatch ownerStarted = new CountDownLatch(1);
+        CountDownLatch releaseOwner = new CountDownLatch(1);
+        AtomicInteger invocations = new AtomicInteger();
+
+        try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
+            Future<String> owner = pool.submit(() -> expiring.executeOnce(KEY, "req", () -> {
+                invocations.incrementAndGet();
+                ownerStarted.countDown();
+                await(releaseOwner);
+                return "owner-result";
+            }));
+            ownerStarted.await();
+            now.addAndGet(Duration.ofDays(1).toNanos());
+
+            AtomicReference<Thread> waiterThread = new AtomicReference<>();
+            Future<String> retry = pool.submit(() -> {
+                waiterThread.set(Thread.currentThread());
+                return expiring.executeOnce(KEY, "req", () -> {
+                    invocations.incrementAndGet();
+                    return "retry-result";
+                });
+            });
+            awaitParked(waiterThread);
+            releaseOwner.countDown();
+
+            assertThat(owner.get()).isEqualTo("owner-result");
+            assertThat(retry.get()).isEqualTo("owner-result");
+        }
+        assertThat(invocations).hasValue(1);
+    }
+
+    @Test
+    void theStoreRefusesToGrowPastItsCap() {
+        IdempotencyGuard<String> tiny = new IdempotencyGuard<>(Duration.ofHours(1), 2, System::nanoTime);
+
+        tiny.executeOnce(new IdempotencyKey("client", "k1"), "req", () -> "a");
+        tiny.executeOnce(new IdempotencyKey("client", "k2"), "req", () -> "b");
+
+        assertThatThrownBy(() -> tiny.executeOnce(new IdempotencyKey("client", "k3"), "req", () -> "c"))
+                .isInstanceOf(IdempotencyCapacityExceededException.class);
     }
 
     /** Spins until the thread is blocked inside the guard, so the test cannot race ahead of it. */

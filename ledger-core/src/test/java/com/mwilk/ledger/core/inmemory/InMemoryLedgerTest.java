@@ -144,8 +144,20 @@ class InMemoryLedgerTest {
         assertThat(ledger.balance(to)).contains(Money.ofMinorUnits(Long.MAX_VALUE - 1_000));
     }
 
+    @Test
+    void sameKeyValueFromDifferentClientsDoesNotCollide() {
+        AccountId from = ledger.openAccount(Money.ofMinorUnits(100));
+        AccountId to = ledger.openAccount(Money.ZERO);
+
+        ledger.transfer(new IdempotencyKey("client-a", "order-42"), request(from, to, 10));
+        ledger.transfer(new IdempotencyKey("client-b", "order-42"), request(from, to, 10));
+
+        assertThat(ledger.balance(from)).contains(Money.ofMinorUnits(80));
+        assertThat(ledger.balance(to)).contains(Money.ofMinorUnits(20));
+    }
+
     private static IdempotencyKey key(String value) {
-        return new IdempotencyKey(value);
+        return new IdempotencyKey("client", value);
     }
 
     private static TransferRequest request(AccountId from, AccountId to, long amount) {

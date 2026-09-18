@@ -187,7 +187,7 @@ class InMemoryLedgerConcurrencyTest {
         InMemoryLedger ledger = new InMemoryLedger(probe);
         AccountId from = ledger.openAccount(Money.ofMinorUnits(100));
         AccountId to = ledger.openAccount(Money.ZERO);
-        IdempotencyKey key = new IdempotencyKey("client-retry");
+        IdempotencyKey key = new IdempotencyKey("client", "client-retry");
         TransferRequest request = new TransferRequest(from, to, Money.ofMinorUnits(30));
 
         List<Future<TransferOutcome>> attempts = new ArrayList<>();
@@ -214,6 +214,6 @@ class InMemoryLedgerConcurrencyTest {
     }
 
     private static IdempotencyKey randomKey() {
-        return new IdempotencyKey(UUID.randomUUID().toString());
+        return new IdempotencyKey("client", UUID.randomUUID().toString());
     }
 }

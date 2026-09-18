@@ -1,5 +1,6 @@
 package com.mwilk.ledger.app.web;
 
+import com.mwilk.ledger.core.IdempotencyCapacityExceededException;
 import com.mwilk.ledger.core.IdempotencyKeyConflictException;
 import com.mwilk.ledger.core.InvalidRequestException;
 import org.slf4j.Logger;
@@ -41,6 +42,13 @@ class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(InvalidRequestException.class)
     ProblemDetail invalidRequest(InvalidRequestException e) {
         return Problems.of(HttpStatus.BAD_REQUEST, "Invalid request", e.getMessage());
+    }
+
+    @ExceptionHandler(IdempotencyCapacityExceededException.class)
+    ProblemDetail idempotencyCapacityExceeded(IdempotencyCapacityExceededException e) {
+        log.warn("Refusing new idempotency keys", e);
+        return Problems.of(HttpStatus.SERVICE_UNAVAILABLE, "Try again later",
+                "The service cannot accept new idempotency keys right now.");
     }
 
     /**

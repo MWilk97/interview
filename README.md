@@ -29,14 +29,15 @@ that fails validation also carries an `errors` object keyed by field name.
 |--------|------------------|---------------------------------------------------------|---------|----------------------------------------------------------|
 | POST   | `/accounts`      | `{"initialBalance": 1000}`                              | 201     | 400 negative or missing balance                          |
 | GET    | `/accounts/{id}` |                                                         | 200     | 400 malformed id, 404 unknown account                    |
-| POST   | `/transfers`     | header `Idempotency-Key`, `{"fromAccountId", "toAccountId", "amount"}` | 201 | 400 missing key / invalid body, 404 unknown account, 409 key reused with a different body, 422 insufficient funds or balance limit exceeded |
+| POST   | `/transfers`     | headers `X-Client-Id`, `Idempotency-Key`, `{"fromAccountId", "toAccountId", "amount"}` | 201 | 400 missing header / invalid body, 404 unknown account, 409 key reused with a different body, 422 insufficient funds or balance limit exceeded, 503 key store full |
 
 ```bash
 curl -s -X POST localhost:8080/accounts -H 'Content-Type: application/json' -d '{"initialBalance": 1000}'
 # {"id":"<A>","balance":1000}
 
 curl -s -X POST localhost:8080/transfers \
-  -H 'Content-Type: application/json' -H 'Idempotency-Key: order-42' \
+  -H 'Content-Type: application/json' \
+  -H 'X-Client-Id: acme' -H 'Idempotency-Key: order-42' \
   -d '{"fromAccountId":"<A>","toAccountId":"<B>","amount":250}'
 # {"transferId":"..."}
 
@@ -58,7 +59,8 @@ curl -s localhost:8080/accounts/<A>
 - **No deadlocks.** Locks are always taken in ascending account-id order.
 - **Parallelism for unrelated accounts.** There is no global lock; transfers on disjoint account pairs
   never contend.
-- **At-most-once per idempotency key.** The first request to claim a key executes the transfer.
+- **At-most-once per idempotency key.** Keys are scoped per client, so two clients picking `order-42`
+  never collide. The first request to claim a key executes the transfer.
   Any later request with the same key, including one that arrives while the first is still in
   flight, waits for and receives the original outcome. Rejections (e.g. insufficient funds) are
   replayed as well. Reusing a key with a different body is a `409 Conflict`.
@@ -114,11 +116,17 @@ and conflict detection.
   `synchronized` so virtual threads do not pin carrier threads.
 - **Balance reads are lock-free.** The balance is an immutable `Money` behind a volatile reference, so a
   reader sees a complete value but may observe a moment just before or after a concurrent transfer.
-- **Idempotency memory grows without bound.** Keys are never expired. A production system would add a
-  TTL or persist keys next to the transfer record.
+- **Idempotency keys have a retention window, not infinite memory.** Keys are kept for 24 hours and the
+  store is capped; past the window a repeated key is treated as a new request and executes again, so the
+  window has to outlast any client's retry schedule. Unbounded retention would be a memory leak that any
+  stream of fresh keys could turn into an outage. When the cap is reached the service answers `503`
+  rather than growing. A persistent implementation would store keys next to the transfer record instead.
 - **Infrastructure failures release the key.** If applying a transfer throws, the key is freed so the
   client can retry; waiters on that key receive the same failure. No path in the in-memory engine
   throws today, but a persistent one would.
+- **`X-Client-Id` stands in for an authenticated principal.** There is no authentication here, so the
+  client names itself. In a real deployment the scope would come from the verified caller identity and
+  the header would not exist; nothing else about the idempotency model would change.
 - **No transfer history or account listing.** Only what the requirements ask for.
 - **A small test seam in the core.** `InMemoryLedger` has a package-private constructor accepting a probe
   that runs while both locks are held. It is the cheapest way to make the parallelism and in-flight
