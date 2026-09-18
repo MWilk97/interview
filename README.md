@@ -76,8 +76,10 @@ ledger-core   plain Java, zero runtime dependencies
   TransferOutcome            sealed result: Completed | InsufficientFunds
                              | BalanceLimitExceeded | UnknownAccount
   inmemory.InMemoryLedger    per-account ReentrantLock, ordered locking
-  inmemory.IdempotencyGuard  ConcurrentHashMap<key, CompletableFuture<outcome>>
+  inmemory.IdempotencyGuard  ConcurrentHashMap<key, CompletableFuture<outcome>>,
+                             bounded by a retention window and a hard cap
 ledger-app    Spring Boot (web MVC), thin controllers + problem-detail error mapping
+              request-id filter, RFC 9457 error mapping
 ```
 
 The HTTP layer depends only on the `Ledger` interface. Replacing the in-memory engine with a real
@@ -88,6 +90,15 @@ Business rejections are values, not exceptions, because they are legitimate outc
 memoised and replayed for a retried key. Structurally invalid requests (same account, zero amount,
 non-UUID id) are rejected by the value objects before they reach the ledger and are never recorded
 against a key, since a retry with the same body can only fail the same way.
+
+### Balances, not postings
+
+A real ledger is append-only: a transfer writes two immutable postings and a balance is the sum of an
+account's postings. This one stores a mutable balance per account, which is what the requirements ask
+for and what makes the concurrency question — the point of the exercise — sharp. The cost is that
+there is nothing to reconstruct, reconcile or audit from: the money is correct at every instant and
+completely unexplained afterwards. Adding postings later means writing them under the same two locks
+that already guard the balances, and the concurrency model does not change.
 
 ## Tests
 
@@ -101,10 +112,14 @@ against a key, since a retry with the same body can only fail the same way.
 - A transfer on unrelated accounts completes while another transfer is deliberately held inside its
   critical section.
 - 20 retries with the same key arriving while the original is held mid-flight: the transfer is applied
-  once and all 21 callers receive the identical outcome.
+  once and all 21 callers receive the identical outcome. The test waits until every retry is parked
+  inside the guard, so "none of them finished" is a statement about the guard and not about timing.
+- A key expires once its retention window passes, but a key whose transfer is still running never
+  does, however long it takes; the store refuses new keys past its cap.
 
-`ledger-app` runs the API end to end on a random port and covers status codes, replayed responses
-and conflict detection.
+`ledger-app` runs the API end to end on a random port and covers status codes, replayed responses,
+conflict detection, and that a failing storage engine still answers in problem+json without leaking
+internals.
 
 ## Trade-offs
 
@@ -116,8 +131,15 @@ and conflict detection.
   retry loop or a multi-word CAS and is much harder to reason about. Ordered locking is provably
   deadlock-free and keeps unrelated transfers parallel, which was the goal. `ReentrantLock` rather than
   `synchronized` so virtual threads do not pin carrier threads.
-- **Balance reads are lock-free.** The balance is an immutable `Money` behind a volatile reference, so a
-  reader sees a complete value but may observe a moment just before or after a concurrent transfer.
+- **Balance reads are lock-free, and there is no snapshot across accounts.** The balance is an immutable
+  `Money` behind a volatile reference, so a reader always sees a complete value, but only for one
+  account: reading A and then B while a transfer between them is in flight can show the debit without
+  the credit. No endpoint reads two accounts today, so nothing observes it — the first endpoint that
+  lists accounts or sums them would need a different read path (a version counter and a retry, or a
+  read lock over the pair).
+- **No authentication, authorisation or rate limiting.** Any caller can open an account and move money
+  from any account it can name. The `422` on insufficient funds also echoes the source balance back,
+  which is only acceptable because there is no notion of who is asking.
 - **Idempotency keys have a retention window, not infinite memory.** Keys are kept for 24 hours and the
   store is capped; past the window a repeated key is treated as a new request and executes again, so the
   window has to outlast any client's retry schedule. Unbounded retention would be a memory leak that any
