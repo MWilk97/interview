@@ -8,6 +8,8 @@ import com.mwilk.ledger.core.TransferOutcome.Completed;
 import com.mwilk.ledger.core.TransferOutcome.InsufficientFunds;
 import com.mwilk.ledger.core.TransferOutcome.UnknownAccount;
 import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -17,6 +19,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 class TransferController {
+
+    private static final Logger log = LoggerFactory.getLogger(TransferController.class);
 
     private final Ledger ledger;
 
@@ -34,6 +38,7 @@ class TransferController {
                                     @Valid @RequestBody PostTransferRequest request) {
         IdempotencyKey key = new IdempotencyKey(clientId, idempotencyKey);
         TransferOutcome outcome = ledger.transfer(key, request.toDomain());
+        log.info("transfer client={} key={} outcome={}", clientId, idempotencyKey, outcome);
         return switch (outcome) {
             case Completed completed -> ResponseEntity
                     .status(HttpStatus.CREATED)

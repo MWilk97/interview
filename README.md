@@ -127,6 +127,9 @@ and conflict detection.
 - **`X-Client-Id` stands in for an authenticated principal.** There is no authentication here, so the
   client names itself. In a real deployment the scope would come from the verified caller identity and
   the header would not exist; nothing else about the idempotency model would change.
+- **Operational logging, not an audit trail.** Every request carries an `X-Request-Id` (taken from the
+  caller when supplied) through the MDC, and each transfer logs its outcome. That is enough to follow a
+  request through the logs; it is not an audit, which would need the transfer to be recorded durably.
 - **No transfer history or account listing.** Only what the requirements ask for.
 - **A small test seam in the core.** `InMemoryLedger` has a package-private constructor accepting a probe
   that runs while both locks are held. It is the cheapest way to make the parallelism and in-flight
