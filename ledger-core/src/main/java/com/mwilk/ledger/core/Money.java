@@ -22,6 +22,14 @@ public record Money(long minorUnits) implements Comparable<Money> {
         return new Money(Math.addExact(minorUnits, other.minorUnits));
     }
 
+    /**
+     * Whether {@link #plus} would stay representable. Both operands are non-negative, so the subtraction
+     * on the right cannot itself overflow.
+     */
+    public boolean canAdd(Money other) {
+        return other.minorUnits <= Long.MAX_VALUE - minorUnits;
+    }
+
     /** @throws InvalidRequestException if the result would be negative */
     public Money minus(Money other) {
         return new Money(Math.subtractExact(minorUnits, other.minorUnits));

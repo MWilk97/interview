@@ -48,12 +48,16 @@ class LedgerApiTest {
     }
 
     @Test
-    void rejectsNegativeInitialBalance() {
+    void rejectsNegativeInitialBalanceAndNamesTheField() {
         client.post().uri("/accounts")
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(new OpenAccountRequest(-1L))
                 .exchange()
-                .expectStatus().isBadRequest();
+                .expectStatus().isBadRequest()
+                .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON)
+                .expectBody()
+                .jsonPath("$.title").isEqualTo("Invalid request")
+                .jsonPath("$.errors.initialBalance").exists();
     }
 
     @Test
@@ -107,6 +111,20 @@ class LedgerApiTest {
 
         assertThat(balanceOf(from.id())).isEqualTo(10);
         assertThat(balanceOf(to.id())).isEqualTo(0);
+    }
+
+    @Test
+    void creditOverflowIsUnprocessableAndChangesNothing() {
+        AccountResponse from = openAccount(10);
+        AccountResponse to = openAccount(Long.MAX_VALUE);
+
+        postTransfer(UUID.randomUUID().toString(), new PostTransferRequest(from.id(), to.id(), 1L))
+                .expectStatus().isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT)
+                .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON)
+                .expectBody().jsonPath("$.title").isEqualTo("Balance limit exceeded");
+
+        assertThat(balanceOf(from.id())).isEqualTo(10);
+        assertThat(balanceOf(to.id())).isEqualTo(Long.MAX_VALUE);
     }
 
     @Test
@@ -172,7 +190,8 @@ class LedgerApiTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(new PostTransferRequest(from.id(), to.id(), 10L))
                 .exchange()
-                .expectStatus().isBadRequest();
+                .expectStatus().isBadRequest()
+                .expectBody().jsonPath("$.title").isEqualTo("Invalid request");
     }
 
     @Test

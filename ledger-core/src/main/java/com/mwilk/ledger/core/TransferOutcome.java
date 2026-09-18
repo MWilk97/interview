@@ -14,6 +14,10 @@ public sealed interface TransferOutcome {
     record InsufficientFunds(AccountId account, Money available, Money requested) implements TransferOutcome {
     }
 
+    /** Nothing was changed: crediting the target would push its balance past the representable maximum. */
+    record BalanceLimitExceeded(AccountId account, Money current, Money requested) implements TransferOutcome {
+    }
+
     /** Nothing was changed: one of the accounts does not exist. */
     record UnknownAccount(AccountId account) implements TransferOutcome {
     }

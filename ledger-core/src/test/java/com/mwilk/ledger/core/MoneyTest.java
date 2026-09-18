@@ -26,6 +26,13 @@ class MoneyTest {
     }
 
     @Test
+    void reportsWhetherAdditionWouldOverflow() {
+        assertThat(Money.ofMinorUnits(100).canAdd(Money.ofMinorUnits(50))).isTrue();
+        assertThat(Money.ofMinorUnits(Long.MAX_VALUE - 1).canAdd(Money.ofMinorUnits(1))).isTrue();
+        assertThat(Money.ofMinorUnits(Long.MAX_VALUE).canAdd(Money.ofMinorUnits(1))).isFalse();
+    }
+
+    @Test
     void additionOverflowFailsInsteadOfWrapping() {
         assertThatThrownBy(() -> Money.ofMinorUnits(Long.MAX_VALUE).plus(Money.ofMinorUnits(1)))
                 .isInstanceOf(ArithmeticException.class);

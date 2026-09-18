@@ -5,6 +5,7 @@ import com.mwilk.ledger.core.IdempotencyKey;
 import com.mwilk.ledger.core.IdempotencyKeyConflictException;
 import com.mwilk.ledger.core.Money;
 import com.mwilk.ledger.core.TransferOutcome;
+import com.mwilk.ledger.core.TransferOutcome.BalanceLimitExceeded;
 import com.mwilk.ledger.core.TransferOutcome.Completed;
 import com.mwilk.ledger.core.TransferOutcome.InsufficientFunds;
 import com.mwilk.ledger.core.TransferOutcome.UnknownAccount;
@@ -116,14 +117,31 @@ class InMemoryLedgerTest {
     }
 
     @Test
-    void creditOverflowFailsWithoutTouchingEitherAccount() {
+    void creditOverflowIsRejectedWithoutTouchingEitherAccount() {
         AccountId from = ledger.openAccount(Money.ofMinorUnits(10));
         AccountId to = ledger.openAccount(Money.ofMinorUnits(Long.MAX_VALUE));
 
-        assertThatThrownBy(() -> ledger.transfer(key("k"), request(from, to, 1)))
-                .isInstanceOf(ArithmeticException.class);
+        TransferOutcome outcome = ledger.transfer(key("k"), request(from, to, 1));
+
+        assertThat(outcome)
+                .isEqualTo(new BalanceLimitExceeded(to, Money.ofMinorUnits(Long.MAX_VALUE), Money.ofMinorUnits(1)));
         assertThat(ledger.balance(from)).contains(Money.ofMinorUnits(10));
         assertThat(ledger.balance(to)).contains(Money.ofMinorUnits(Long.MAX_VALUE));
+    }
+
+    @Test
+    void repeatedKeyReplaysABalanceLimitRejectionEvenAfterRoomIsFreed() {
+        AccountId from = ledger.openAccount(Money.ofMinorUnits(10));
+        AccountId to = ledger.openAccount(Money.ofMinorUnits(Long.MAX_VALUE));
+        AccountId drain = ledger.openAccount(Money.ZERO);
+
+        TransferOutcome rejected = ledger.transfer(key("k"), request(from, to, 1));
+        ledger.transfer(key("drain"), request(to, drain, 1_000));
+        TransferOutcome replayed = ledger.transfer(key("k"), request(from, to, 1));
+
+        assertThat(rejected).isInstanceOf(BalanceLimitExceeded.class);
+        assertThat(replayed).isEqualTo(rejected);
+        assertThat(ledger.balance(to)).contains(Money.ofMinorUnits(Long.MAX_VALUE - 1_000));
     }
 
     private static IdempotencyKey key(String value) {

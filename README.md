@@ -22,13 +22,14 @@ Build and run the whole test suite:
 ## API
 
 Amounts are integers in minor units (e.g. cents) of one implicit currency. Errors use
-`application/problem+json` (RFC 9457).
+`application/problem+json` (RFC 9457); every `400` carries the title `Invalid request`, and a body
+that fails validation also carries an `errors` object keyed by field name.
 
 | Method | Path             | Body / headers                                          | Success | Errors                                                   |
 |--------|------------------|---------------------------------------------------------|---------|----------------------------------------------------------|
 | POST   | `/accounts`      | `{"initialBalance": 1000}`                              | 201     | 400 negative or missing balance                          |
 | GET    | `/accounts/{id}` |                                                         | 200     | 400 malformed id, 404 unknown account                    |
-| POST   | `/transfers`     | header `Idempotency-Key`, `{"fromAccountId", "toAccountId", "amount"}` | 201 | 400 missing key / invalid body, 404 unknown account, 409 key reused with a different body, 422 insufficient funds |
+| POST   | `/transfers`     | header `Idempotency-Key`, `{"fromAccountId", "toAccountId", "amount"}` | 201 | 400 missing key / invalid body, 404 unknown account, 409 key reused with a different body, 422 insufficient funds or balance limit exceeded |
 
 ```bash
 curl -s -X POST localhost:8080/accounts -H 'Content-Type: application/json' -d '{"initialBalance": 1000}'
@@ -46,8 +47,9 @@ curl -s localhost:8080/accounts/<A>
 ## Guarantees
 
 - **Atomic transfers.** A transfer debits one account and credits the other, or changes nothing.
-  Both new balances are computed before either is written, so even an arithmetic overflow on the
-  credit side leaves both accounts untouched.
+  Both sides are checked before either is written, so a transfer that cannot complete in full
+  (insufficient funds, or a credit that would exceed the maximum balance) leaves both accounts
+  untouched.
 - **No negative balances.** The debit is checked and applied while the source account's lock is held.
   `Money` itself cannot represent a negative value.
 - **No lost updates, no double-spends.** Every account has its own lock and a transfer holds both
@@ -67,7 +69,8 @@ curl -s localhost:8080/accounts/<A>
 ledger-core   plain Java, zero runtime dependencies
   Ledger                     port used by the HTTP layer
   Money, AccountId, ...      value objects (records) that enforce structural invariants
-  TransferOutcome            sealed result: Completed | InsufficientFunds | UnknownAccount
+  TransferOutcome            sealed result: Completed | InsufficientFunds
+                             | BalanceLimitExceeded | UnknownAccount
   inmemory.InMemoryLedger    per-account ReentrantLock, ordered locking
   inmemory.IdempotencyGuard  ConcurrentHashMap<key, CompletableFuture<outcome>>
 ledger-app    Spring Boot (web MVC), thin controllers + problem-detail error mapping
@@ -101,8 +104,10 @@ and conflict detection.
 
 ## Trade-offs
 
-- **`long` minor units instead of `BigDecimal`.** Simpler, faster and exact for a single currency;
-  overflow fails loudly rather than wrapping. Multi-currency would need a currency on `Money`.
+- **`long` minor units instead of `BigDecimal`.** Simpler, faster and exact for a single currency.
+  A credit that would exceed `Long.MAX_VALUE` is rejected as a business outcome rather than throwing,
+  so it is memoised and replayed like any other rejection. Multi-currency would need a currency on
+  `Money`.
 - **Per-account locks with ordered acquisition instead of lock-free CAS.** Two-account CAS needs a
   retry loop or a multi-word CAS and is much harder to reason about. Ordered locking is provably
   deadlock-free and keeps unrelated transfers parallel, which was the goal. `ReentrantLock` rather than
@@ -111,8 +116,9 @@ and conflict detection.
   reader sees a complete value but may observe a moment just before or after a concurrent transfer.
 - **Idempotency memory grows without bound.** Keys are never expired. A production system would add a
   TTL or persist keys next to the transfer record.
-- **Infrastructure failures release the key.** If applying a transfer throws (only overflow can do that
-  here), the key is freed so the client can retry; waiters on that key receive the same failure.
+- **Infrastructure failures release the key.** If applying a transfer throws, the key is freed so the
+  client can retry; waiters on that key receive the same failure. No path in the in-memory engine
+  throws today, but a persistent one would.
 - **No transfer history or account listing.** Only what the requirements ask for.
 - **A small test seam in the core.** `InMemoryLedger` has a package-private constructor accepting a probe
   that runs while both locks are held. It is the cheapest way to make the parallelism and in-flight

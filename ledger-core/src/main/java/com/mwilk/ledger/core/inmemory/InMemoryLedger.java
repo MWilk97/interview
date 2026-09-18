@@ -6,6 +6,7 @@ import com.mwilk.ledger.core.Ledger;
 import com.mwilk.ledger.core.Money;
 import com.mwilk.ledger.core.TransferId;
 import com.mwilk.ledger.core.TransferOutcome;
+import com.mwilk.ledger.core.TransferOutcome.BalanceLimitExceeded;
 import com.mwilk.ledger.core.TransferOutcome.Completed;
 import com.mwilk.ledger.core.TransferOutcome.InsufficientFunds;
 import com.mwilk.ledger.core.TransferOutcome.UnknownAccount;
@@ -91,9 +92,12 @@ public final class InMemoryLedger implements Ledger {
         if (available.isLessThan(request.amount())) {
             return new InsufficientFunds(request.from(), available, request.amount());
         }
-        // Compute both new balances before writing either, so an overflow on the credit side leaves nothing changed.
+        Money current = target.balance();
+        if (!current.canAdd(request.amount())) {
+            return new BalanceLimitExceeded(request.to(), current, request.amount());
+        }
         Money debited = available.minus(request.amount());
-        Money credited = target.balance().plus(request.amount());
+        Money credited = current.plus(request.amount());
         source.setBalance(debited);
         target.setBalance(credited);
         return new Completed(TransferId.random());

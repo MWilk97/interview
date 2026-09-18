@@ -3,6 +3,7 @@ package com.mwilk.ledger.app.web;
 import com.mwilk.ledger.core.IdempotencyKey;
 import com.mwilk.ledger.core.Ledger;
 import com.mwilk.ledger.core.TransferOutcome;
+import com.mwilk.ledger.core.TransferOutcome.BalanceLimitExceeded;
 import com.mwilk.ledger.core.TransferOutcome.Completed;
 import com.mwilk.ledger.core.TransferOutcome.InsufficientFunds;
 import com.mwilk.ledger.core.TransferOutcome.UnknownAccount;
@@ -39,6 +40,12 @@ class TransferController {
                     .of(Problems.of(HttpStatus.UNPROCESSABLE_CONTENT, "Insufficient funds",
                             "Account %s has %d available, %d requested".formatted(rejected.account(),
                                     rejected.available().minorUnits(), rejected.requested().minorUnits())))
+                    .build();
+            case BalanceLimitExceeded rejected -> ResponseEntity
+                    .of(Problems.of(HttpStatus.UNPROCESSABLE_CONTENT, "Balance limit exceeded",
+                            "Account %s holds %d, crediting %d more would exceed the maximum balance"
+                                    .formatted(rejected.account(), rejected.current().minorUnits(),
+                                            rejected.requested().minorUnits())))
                     .build();
             case UnknownAccount rejected -> throw new AccountNotFoundException(rejected.account());
         };
