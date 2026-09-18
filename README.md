@@ -1,5 +1,7 @@
 # Ledger
 
+[![CI](https://github.com/MWilk97/interview/actions/workflows/ci.yml/badge.svg)](https://github.com/MWilk97/interview/actions/workflows/ci.yml)
+
 In-memory ledger with an HTTP API: open accounts, read balances and post atomic, idempotent transfers
 that stay correct under heavy concurrent load.
 
