@@ -24,11 +24,12 @@ jobs:
       - run: ./mvnw -B --no-transfer-progress verify
 
       # One green run says little about a concurrency suite: interleavings differ every time, and a race
-      # that shows up in one run in ten would otherwise ship. The core module takes about a second.
-      - name: Repeat the core suite
+      # that shows up in one run in ten would otherwise ship. Both modules carry one - ledger-core against
+      # the ledger directly, ledger-app through a real socket - so both are repeated. The suite is seconds.
+      - name: Repeat the test suites
         run: |
           for run in 1 2 3 4 5; do
-            echo "::group::core suite, run $run"
-            ./mvnw -B --no-transfer-progress -pl ledger-core test
+            echo "::group::test suites, run $run"
+            ./mvnw -B --no-transfer-progress test
             echo "::endgroup::"
           done

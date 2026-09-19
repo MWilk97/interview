@@ -28,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Demonstrates the concurrency guarantees: no lost updates, no double-spends, no deadlocks, parallelism for
  * unrelated accounts and at-most-once execution for overlapping retries.
  */
-@Timeout(60)
+@Timeout(value = 60, unit = TimeUnit.SECONDS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 class InMemoryLedgerConcurrencyTest {
 
     @Test
@@ -122,13 +122,16 @@ class InMemoryLedgerConcurrencyTest {
     }
 
     @Test
-    @Timeout(20)
+    @Timeout(value = 20, unit = TimeUnit.SECONDS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
     void oppositeDirectionTransfersOnTheSamePairDoNotDeadlock() throws Exception {
         int threads = 8;
         int transfersPerThread = 10_000;
         InMemoryLedger ledger = new InMemoryLedger();
-        AccountId a = ledger.openAccount(Money.ofMinorUnits(10_000));
-        AccountId b = ledger.openAccount(Money.ofMinorUnits(10_000));
+        // Enough to fund every transfer even if one direction runs to completion first, so a rejection here
+        // would mean a real defect rather than a scheduling accident.
+        AccountId a = ledger.openAccount(Money.ofMinorUnits(100_000));
+        AccountId b = ledger.openAccount(Money.ofMinorUnits(100_000));
+        LongAdder completed = new LongAdder();
         CyclicBarrier startTogether = new CyclicBarrier(threads);
 
         try (ExecutorService pool = Executors.newFixedThreadPool(threads)) {
@@ -141,7 +144,9 @@ class InMemoryLedgerConcurrencyTest {
                             ? new TransferRequest(a, b, Money.ofMinorUnits(1))
                             : new TransferRequest(b, a, Money.ofMinorUnits(1));
                     for (int i = 0; i < transfersPerThread; i++) {
-                        ledger.transfer(randomKey(), request);
+                        if (ledger.transfer(randomKey(), request) instanceof Completed) {
+                            completed.increment();
+                        }
                     }
                     return null;
                 }));
@@ -152,7 +157,8 @@ class InMemoryLedgerConcurrencyTest {
         }
 
         long total = ledger.balance(a).orElseThrow().minorUnits() + ledger.balance(b).orElseThrow().minorUnits();
-        assertThat(total).isEqualTo(20_000);
+        assertThat(total).isEqualTo(200_000);
+        assertThat(completed.sum()).isEqualTo((long) threads * transfersPerThread);
     }
 
     @Test

@@ -1,6 +1,12 @@
 spring:
   application:
     name: ledger
+  jackson:
+    deserialization:
+      # A JSON amount is minor units, so 10.99 is not "10 with a rounding error" - it is a client that
+      # disagrees with the API about the unit. Accepting it would silently move a different sum and, worse,
+      # make two different bodies share one idempotency fingerprint.
+      accept-float-as-int: false
   threads:
     virtual:
       enabled: true

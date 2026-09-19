@@ -235,6 +235,50 @@ class LedgerApiTest {
         assertThat(balanceOf(from.id())).isEqualTo(100);
     }
 
+    /**
+     * 10.99 is not a rounding error on minor units, it is a client disagreeing about the unit. Truncating it
+     * would move a different sum than asked and, worse, give two different bodies one fingerprint, so the
+     * documented 409 on key reuse would silently become a replayed 201.
+     */
+    @Test
+    void nonIntegerAmountIsRejectedRatherThanTruncated() {
+        AccountResponse from = openAccount(100);
+        AccountResponse to = openAccount(0);
+
+        client.post().uri("/transfers")
+                .header(IDEMPOTENCY_KEY, UUID.randomUUID().toString())
+                .header(CLIENT_ID, CLIENT)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("fromAccountId", from.id(), "toAccountId", to.id(), "amount", 10.99))
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON);
+
+        assertThat(balanceOf(from.id())).isEqualTo(100);
+        assertThat(balanceOf(to.id())).isEqualTo(0);
+    }
+
+    @Test
+    void nonIntegerInitialBalanceIsRejected() {
+        client.post().uri("/accounts")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("initialBalance", 10.5))
+                .exchange()
+                .expectStatus().isBadRequest();
+    }
+
+    /** Every retained key is memory the caller chooses, so its length is part of the API contract. */
+    @Test
+    void anOverlongIdempotencyKeyIsRejected() {
+        AccountResponse from = openAccount(100);
+        AccountResponse to = openAccount(0);
+
+        postTransfer("k".repeat(256), new PostTransferRequest(from.id(), to.id(), 10L))
+                .expectStatus().isBadRequest();
+
+        assertThat(balanceOf(from.id())).isEqualTo(100);
+    }
+
     private AccountResponse openAccount(long initialBalance) {
         AccountResponse response = client.post().uri("/accounts")
                 .contentType(MediaType.APPLICATION_JSON)

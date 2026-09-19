@@ -12,6 +12,7 @@ import com.mwilk.ledger.core.TransferOutcome.InsufficientFunds;
 import com.mwilk.ledger.core.TransferOutcome.UnknownAccount;
 import com.mwilk.ledger.core.TransferRequest;
 
+import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -27,11 +28,21 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class InMemoryLedger implements Ledger {
 
     private final ConcurrentHashMap<AccountId, Account> accounts = new ConcurrentHashMap<>();
-    private final IdempotencyGuard<TransferOutcome> transfers = new IdempotencyGuard<>();
+    private final IdempotencyGuard<TransferOutcome> transfers;
     private final Runnable criticalSectionProbe;
 
     public InMemoryLedger() {
-        this(() -> { });
+        this(IdempotencyGuard.DEFAULT_RETENTION, IdempotencyGuard.DEFAULT_MAX_ENTRIES);
+    }
+
+    /**
+     * @param idempotencyRetention how long a used key is remembered; a retry arriving after it re-executes
+     * @param maxIdempotencyKeys hard cap on remembered keys, past which the ledger refuses new ones. Together
+     *        with the retention window this sets a sustained ceiling of {@code maxIdempotencyKeys / retention}
+     *        transfers per second; replays of keys already held keep working past it.
+     */
+    public InMemoryLedger(Duration idempotencyRetention, int maxIdempotencyKeys) {
+        this(idempotencyRetention, maxIdempotencyKeys, () -> { });
     }
 
     /**
@@ -39,6 +50,11 @@ public final class InMemoryLedger implements Ledger {
      * transfer open and prove that unrelated transfers proceed and that overlapping retries do not re-execute.
      */
     InMemoryLedger(Runnable criticalSectionProbe) {
+        this(IdempotencyGuard.DEFAULT_RETENTION, IdempotencyGuard.DEFAULT_MAX_ENTRIES, criticalSectionProbe);
+    }
+
+    private InMemoryLedger(Duration idempotencyRetention, int maxIdempotencyKeys, Runnable criticalSectionProbe) {
+        this.transfers = new IdempotencyGuard<>(idempotencyRetention, maxIdempotencyKeys, System::nanoTime);
         this.criticalSectionProbe = Objects.requireNonNull(criticalSectionProbe, "criticalSectionProbe");
     }
 
@@ -69,6 +85,10 @@ public final class InMemoryLedger implements Ledger {
             return new UnknownAccount(request.to());
         }
 
+        // Minted before the locks: UUID.randomUUID() draws from one process-wide SecureRandom, so doing it
+        // inside the critical section would serialise transfers that touch entirely unrelated accounts.
+        TransferId transferId = TransferId.random();
+
         boolean sourceFirst = request.from().compareTo(request.to()) < 0;
         Account first = sourceFirst ? source : target;
         Account second = sourceFirst ? target : source;
@@ -78,7 +98,7 @@ public final class InMemoryLedger implements Ledger {
             second.lock().lock();
             try {
                 criticalSectionProbe.run();
-                return applyLocked(source, target, request);
+                return applyLocked(source, target, request, transferId);
             } finally {
                 second.lock().unlock();
             }
@@ -87,7 +107,8 @@ public final class InMemoryLedger implements Ledger {
         }
     }
 
-    private static TransferOutcome applyLocked(Account source, Account target, TransferRequest request) {
+    private static TransferOutcome applyLocked(Account source, Account target, TransferRequest request,
+                                               TransferId transferId) {
         Money available = source.balance();
         if (available.isLessThan(request.amount())) {
             return new InsufficientFunds(request.from(), available, request.amount());
@@ -100,6 +121,6 @@ public final class InMemoryLedger implements Ledger {
         Money credited = current.plus(request.amount());
         source.setBalance(debited);
         target.setBalance(credited);
-        return new Completed(TransferId.random());
+        return new Completed(transferId);
     }
 }

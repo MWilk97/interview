@@ -64,11 +64,21 @@ class IdempotencyGuardTest {
             ownerStarted.await();
 
             List<Future<String>> retries = new ArrayList<>();
+            List<AtomicReference<Thread>> retryThreads = new ArrayList<>();
             for (int i = 0; i < 20; i++) {
-                retries.add(pool.submit(() -> guard.executeOnce(KEY, "req", () -> {
-                    invocations.incrementAndGet();
-                    return "retry-result";
-                })));
+                AtomicReference<Thread> retryThread = new AtomicReference<>();
+                retryThreads.add(retryThread);
+                retries.add(pool.submit(() -> {
+                    retryThread.set(Thread.currentThread());
+                    return guard.executeOnce(KEY, "req", () -> {
+                        invocations.incrementAndGet();
+                        return "retry-result";
+                    });
+                }));
+            }
+            // Every retry has reached the guard and parked, so "none is done" is a statement about the guard.
+            for (AtomicReference<Thread> retryThread : retryThreads) {
+                Threads.awaitParked(retryThread);
             }
             assertThat(retries).noneMatch(Future::isDone);
 
@@ -188,6 +198,38 @@ class IdempotencyGuardTest {
 
         assertThatThrownBy(() -> tiny.executeOnce(new IdempotencyKey("client", "k3"), "req", () -> "c"))
                 .isInstanceOf(IdempotencyCapacityExceededException.class);
+    }
+
+    @Test
+    void aFullStoreIsNotRescannedOnEveryRefusal() {
+        AtomicLong now = new AtomicLong();
+        IdempotencyGuard<String> tiny = new IdempotencyGuard<>(Duration.ofHours(1), 2, now::get);
+        tiny.executeOnce(new IdempotencyKey("client", "k1"), "req", () -> "a");
+        tiny.executeOnce(new IdempotencyKey("client", "k2"), "req", () -> "b");
+        long sweptWhileFilling = tiny.sweepCount();
+
+        for (int i = 0; i < 50; i++) {
+            IdempotencyKey rejected = new IdempotencyKey("client", "over-" + i);
+            assertThatThrownBy(() -> tiny.executeOnce(rejected, "req", () -> "c"))
+                    .isInstanceOf(IdempotencyCapacityExceededException.class);
+        }
+
+        // One scan for the first refusal; the remaining 49 are refused without walking the store again.
+        assertThat(tiny.sweepCount() - sweptWhileFilling).isEqualTo(1);
+    }
+
+    @Test
+    void aFullStoreAcceptsKeysAgainOnceItsEntriesExpire() {
+        AtomicLong now = new AtomicLong();
+        IdempotencyGuard<String> tiny = new IdempotencyGuard<>(Duration.ofHours(1), 2, now::get);
+        tiny.executeOnce(new IdempotencyKey("client", "k1"), "req", () -> "a");
+        tiny.executeOnce(new IdempotencyKey("client", "k2"), "req", () -> "b");
+        assertThatThrownBy(() -> tiny.executeOnce(new IdempotencyKey("client", "k3"), "req", () -> "c"))
+                .isInstanceOf(IdempotencyCapacityExceededException.class);
+
+        now.addAndGet(Duration.ofHours(2).toNanos());
+
+        assertThat(tiny.executeOnce(new IdempotencyKey("client", "k4"), "req", () -> "d")).isEqualTo("d");
     }
 
     private static void await(CountDownLatch latch) {

@@ -37,11 +37,21 @@ final class IdempotencyGuard<R> {
     /** A sweep is O(size), so it is amortised over this many claims. */
     private static final int SWEEP_INTERVAL = 1_024;
 
+    /**
+     * At the cap the claim counter stops amortising anything: every arrival sees a full store, so sweeping on
+     * that condition alone would rescan the whole map once per request, exactly when it is largest, and reclaim
+     * nothing until the oldest entry ages out. Over-cap sweeps are rate-limited to one per this interval, which
+     * keeps a saturated store's refusals O(1) while still reclaiming promptly once entries start expiring.
+     */
+    private static final long OVER_CAP_SWEEP_INTERVAL_NANOS = Duration.ofSeconds(1).toNanos();
+
     private record Entry<R>(Object fingerprint, CompletableFuture<R> result, long claimedAt) {
     }
 
     private final ConcurrentHashMap<IdempotencyKey, Entry<R>> entries = new ConcurrentHashMap<>();
     private final AtomicLong claims = new AtomicLong();
+    private final AtomicLong sweeps = new AtomicLong();
+    private final AtomicLong overCapSweepNotBefore;
     private final long retentionNanos;
     private final int maxEntries;
     private final LongSupplier nanoClock;
@@ -62,6 +72,7 @@ final class IdempotencyGuard<R> {
         this.retentionNanos = retention.toNanos();
         this.maxEntries = maxEntries;
         this.nanoClock = Objects.requireNonNull(nanoClock, "nanoClock");
+        this.overCapSweepNotBefore = new AtomicLong(nanoClock.getAsLong());
     }
 
     /**
@@ -101,25 +112,44 @@ final class IdempotencyGuard<R> {
     }
 
     private void claimed(IdempotencyKey key, Entry<R> mine) {
-        if (claims.incrementAndGet() % SWEEP_INTERVAL == 0 || entries.size() > maxEntries) {
+        if (claims.incrementAndGet() % SWEEP_INTERVAL == 0) {
             sweep();
         }
         if (entries.size() > maxEntries) {
-            entries.remove(key, mine);
-            IdempotencyCapacityExceededException failure = new IdempotencyCapacityExceededException(maxEntries);
-            // A caller may already be waiting on this future; it must not be abandoned uncompleted.
-            mine.result().completeExceptionally(failure);
-            throw failure;
+            if (maySweepOverCap()) {
+                sweep();
+            }
+            if (entries.size() > maxEntries) {
+                entries.remove(key, mine);
+                IdempotencyCapacityExceededException failure = new IdempotencyCapacityExceededException(maxEntries);
+                // A caller may already be waiting on this future; it must not be abandoned uncompleted.
+                mine.result().completeExceptionally(failure);
+                throw failure;
+            }
         }
     }
 
+    /** True for at most one caller per {@link #OVER_CAP_SWEEP_INTERVAL_NANOS}. */
+    private boolean maySweepOverCap() {
+        long now = nanoClock.getAsLong();
+        long notBefore = overCapSweepNotBefore.get();
+        return notBefore - now <= 0
+                && overCapSweepNotBefore.compareAndSet(notBefore, now + OVER_CAP_SWEEP_INTERVAL_NANOS);
+    }
+
     private void sweep() {
+        sweeps.incrementAndGet();
         for (Map.Entry<IdempotencyKey, Entry<R>> candidate : entries.entrySet()) {
             Entry<R> entry = candidate.getValue();
             if (isExpired(entry)) {
                 entries.remove(candidate.getKey(), entry);
             }
         }
+    }
+
+    /** Test seam: how many O(size) scans have run, so the cost of a saturated store can be asserted. */
+    long sweepCount() {
+        return sweeps.get();
     }
 
     private R runAsOwner(IdempotencyKey key, Entry<R> mine, Supplier<R> action) {
